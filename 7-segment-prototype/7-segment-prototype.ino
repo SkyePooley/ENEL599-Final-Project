@@ -1,7 +1,8 @@
 static int SER = 12;
-static int RCLK = 11;
-static int SCLK = 10;
+static int RCLK = 10;
+static int SCLK = 11;
 static int OE = 9;
+static int BUZZER = 8;
 
 int counter = 0;
 
@@ -19,17 +20,28 @@ char digitMappings[10] = {
 };
 
 void setup() {
+    pinMode(BUZZER, OUTPUT);
     pinMode(SER, OUTPUT);
     pinMode(RCLK, OUTPUT);
     pinMode(SCLK, OUTPUT);
     pinMode(OE, OUTPUT);
 
+    // clear shift registers
     digitalWrite(OE, LOW);
     digitalWrite(RCLK, LOW);
-    shiftOut(SER, SCLK, MSBFIRST, 0b11111111);
+    shiftOut(SER, SCLK, MSBFIRST, 0b00000000); 
+    shiftOut(SER, SCLK, MSBFIRST, 0b00000000);
     digitalWrite(RCLK, HIGH);
     delay(1);
     digitalWrite(RCLK, LOW);
+
+    // startup beep
+    tone(BUZZER, 987); // B5
+    delay(100); 
+    noTone(BUZZER);
+    tone(BUZZER, 3951); // B7
+    delay(350);
+    noTone(BUZZER);
 }
 
 void loop() {
