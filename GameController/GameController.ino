@@ -1,7 +1,7 @@
-#define FLAG_PADDLE_A 0;
-#define FLAG_PADDLE_B 1;
-#define FLAG_BALL_X   2;
-#define FLAG_BALL_Y   3;
+#define FLAG_PADDLE_A 0
+#define FLAG_PADDLE_B 1
+#define FLAG_BALL_X   2
+#define FLAG_BALL_Y   3
 
 // ------  Static variables and pin assignments ------
 // Shift register control pins
@@ -18,7 +18,7 @@ static int CONTROLLER_TWO = A1;
 static int frameRate = 60;
 static int frameTime = 1000/frameRate; // time inbetween frames.
 static int resolution[2] = {32, 16};
-static float ballSpeed = 0.4;
+static int PADDLE_WIDTH = 4;
 
 // ------- Music tracks and sound effects --------
 struct MusicTrack {
@@ -28,10 +28,35 @@ struct MusicTrack {
 
 static struct MusicTrack STARTUP_JINGLE = {
     {
-        {987, 200},
-        {3951, 600}
+        {987, 20},
+        {3951, 60}
     },
     2
+};
+
+static struct MusicTrack MISS = {
+    {
+        {400, 10},
+        {250, 10},
+        {400, 10},
+        {250, 10},
+        {400, 10},
+        {250, 10},
+        {100, 250}
+    },
+    9
+};
+
+static struct MusicTrack HIT = {
+    {
+        {600, 10},
+        {850, 10},
+        {600, 10},
+        {850, 10},
+        {600, 10},
+        {850, 10},
+    },
+    8
 };
 
 static struct MusicTrack A1SCALE = {
@@ -94,17 +119,22 @@ char digitMappings[10] = {
 // Scores
 unsigned int playerOneScore = 0;
 unsigned int playerTwoScore = 0;
+
 // Timers
 unsigned long toneEndTime = 0; // records the time when a started tone should stop.
 unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
+
 // Entities
 unsigned int paddleOnePos = resolution[1] / 2;
 unsigned int paddleTwoPos = resolution[1] / 2;
 float ballPos[2] = {0.0, resolution[1] / 2.0};
-float ballDirection = 45;
+float ballVelocity[2] = {0.15, 0.2}; // amount to move in X,Y each refresh
+
+
 // Pin Readings
 int controllerOneSignal = 0;
 int controllerTwoSignal = 0;
+
 // Music tracking
 bool musicActive = false;
 struct MusicTrack* p_activeTrack;
@@ -158,39 +188,32 @@ void sendWithID(int value5, int id3) {
     Serial.write((id3 << 5) ^ value5);
 }
 
-float updateBall(float* ballPos, float ballDirection) {
-    float radianDirection = degToRad(ballDirection);
-    
-    float xOffset = ballSpeed * cos(radianDirection);
-    float yOffset = ballSpeed * sin(radianDirection);
+void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
+    ballPos[0] += ballVelocity[0];
+    ballPos[1] += ballVelocity[1];
 
-    ballPos[0] += xOffset;
-    ballPos[1] += yOffset;
+    if (ballPos[0] < 1) {
+        if ((int)ballPos[1] >= paddleOnePos && paddleOnePos+PADDLE_WIDTH >= (int)ballPos[1]) {
+            ballVelocity[0] *= -1;
+            startMusicTrack(&HIT);
+        }
+        else {
+            playerTwoScore++;
+            startMusicTrack(&MISS);
+            ballPos[0] = 30;
+            ballPos[1] = resolution[1]/2;
+            ballVelocity[0] = -0.15;
+            ballVelocity[1] = +0.25;
+        }
+        
+    }
+    else if (ballPos[0] > 31) {
+        ballVelocity[0] *= -1;
+    }
 
-    // Constrain ball Y and bounce
-    if (ballPos[1] < 0) { 
-      ballPos[1] = 0;
-      if (ballDirection < 180) { ballDirection = 135; }
-      else { ballDirection = 225; }
+    if (ballPos[1] < 0 || ballPos[1] > 15) {
+        ballVelocity[1] *= -1;
     }
-    else if (ballPos[1] > 15) { 
-      ballPos[1] = 15; 
-      if (ballDirection < 180) { ballDirection = 45; }
-      else { ballDirection = 315; }
-    }
-    // Constrain ball X and bounce
-    if (ballPos[0] < 0) { 
-      ballPos[0] = 0;
-      if (ballDirection < 270) { ballDirection = 135; }
-      else { ballDirection = 45; }
-    }
-    else if (ballPos[0] > 31) { 
-      ballPos[0] = 31; 
-      if (ballDirection < 90) { ballDirection = 315; }
-      else { ballDirection = 225; }
-    }
-    
-    return ballDirection;
 }
 
 void setup() {
@@ -205,8 +228,8 @@ void setup() {
     // Clear any floating rubbish on the registers
     clearCounters();
 
-    //startMusicTrack(&STARTUP_JINGLE);
-    startMusicTrack(&A4SCALE);
+    startMusicTrack(&STARTUP_JINGLE);
+    //startMusicTrack(&A4SCALE);
 
     Serial.begin(115200);
 }
@@ -214,13 +237,16 @@ void setup() {
 void loop() {
     controllerOneSignal = analogRead(CONTROLLER_ONE);
     controllerTwoSignal = analogRead(CONTROLLER_TWO);
-    paddleOnePos = map(controllerOneSignal, 0,1023, 0,9);
-    paddleTwoPos = map(controllerTwoSignal, 0,1023, 0,9);
+    paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
+    paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
   
     // is it time to update displays?
     if (millis() > lastRefreshTime + frameTime) {
         // update 7-segment displays
-        setCounters(paddleOnePos, paddleTwoPos);
+        setCounters(playerOneScore, playerTwoScore);
+
+        updateBall(ballVelocity, ballPos, paddleOnePos);
+        
         // send entity positions to graphics controller
         sendWithID(paddleOnePos, FLAG_PADDLE_A);
         sendWithID(paddleTwoPos, FLAG_PADDLE_B);
