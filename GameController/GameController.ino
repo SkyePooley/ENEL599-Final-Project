@@ -1,3 +1,8 @@
+#define FLAG_PADDLE_A 0;
+#define FLAG_PADDLE_B 1;
+#define FLAG_BALL_X   2;
+#define FLAG_BALL_Y   3;
+
 // ------  Static variables and pin assignments ------
 // Shift register control pins
 static int SER = 12; // data pin 
@@ -13,6 +18,7 @@ static int CONTROLLER_TWO = A1;
 static int frameRate = 60;
 static int frameTime = 1000/frameRate; // time inbetween frames.
 static int resolution[2] = {32, 16};
+static float ballSpeed = 0.4;
 
 // ------- Music tracks and sound effects --------
 struct MusicTrack {
@@ -94,7 +100,8 @@ unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
 // Entities
 unsigned int paddleOnePos = resolution[1] / 2;
 unsigned int paddleTwoPos = resolution[1] / 2;
-int ballPos[2] = {0, resolution[1] / 2};
+float ballPos[2] = {0.0, resolution[1] / 2.0};
+float ballDirection = 45;
 // Pin Readings
 int controllerOneSignal = 0;
 int controllerTwoSignal = 0;
@@ -141,10 +148,49 @@ void startMusicTrack(struct MusicTrack* p_newTrack) {
     startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
 }
 
-// Sends a value over serial with an identifying character.
-void sendWithID(int precision8, char id) {
-    Serial.write(id);
-    Serial.write(precision8);
+/* 
+Sends a value over serial with an identifying flag.
+value5: value of the transmitted number, max 5 bit precision.
+id3:    id flag of the number being send, max 3 bit precision.
+*/
+void sendWithID(int value5, int id3) {
+    // shift the id flag to the three most significant bits, then join with the value.
+    Serial.write((id3 << 5) ^ value5);
+}
+
+float updateBall(float* ballPos, float ballDirection) {
+    float radianDirection = degToRad(ballDirection);
+    
+    float xOffset = ballSpeed * cos(radianDirection);
+    float yOffset = ballSpeed * sin(radianDirection);
+
+    ballPos[0] += xOffset;
+    ballPos[1] += yOffset;
+
+    // Constrain ball Y and bounce
+    if (ballPos[1] < 0) { 
+      ballPos[1] = 0;
+      if (ballDirection < 180) { ballDirection = 135; }
+      else { ballDirection = 225; }
+    }
+    else if (ballPos[1] > 15) { 
+      ballPos[1] = 15; 
+      if (ballDirection < 180) { ballDirection = 45; }
+      else { ballDirection = 315; }
+    }
+    // Constrain ball X and bounce
+    if (ballPos[0] < 0) { 
+      ballPos[0] = 0;
+      if (ballDirection < 270) { ballDirection = 135; }
+      else { ballDirection = 45; }
+    }
+    else if (ballPos[0] > 31) { 
+      ballPos[0] = 31; 
+      if (ballDirection < 90) { ballDirection = 315; }
+      else { ballDirection = 225; }
+    }
+    
+    return ballDirection;
 }
 
 void setup() {
@@ -173,7 +219,13 @@ void loop() {
   
     // is it time to update displays?
     if (millis() > lastRefreshTime + frameTime) {
+        // update 7-segment displays
         setCounters(paddleOnePos, paddleTwoPos);
+        // send entity positions to graphics controller
+        sendWithID(paddleOnePos, FLAG_PADDLE_A);
+        sendWithID(paddleTwoPos, FLAG_PADDLE_B);
+        sendWithID((int)ballPos[0], FLAG_BALL_X);
+        sendWithID((int)ballPos[1], FLAG_BALL_Y);
         
         lastRefreshTime = millis();
     }
