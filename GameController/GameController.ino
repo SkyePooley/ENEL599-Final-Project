@@ -1,3 +1,17 @@
+/*
+    ENEL599 Final Project Game Controller code
+    October 2023 - Skye Pooley - 22179237
+    This code works in tandem with the "Graphics controller code" on the other arduino.
+    Both controllers are needed for the game to work.
+    This controller handles:
+        Input from the players
+        Simulation of game objects
+        Playing of sound effects and simple music
+        Output to 7-segment displays to show player scores
+        Transfer of game entity positions over serial to graphics controller arduino.
+*/
+
+// Labels for serial data flags, used to determine what a transmitted number refers to.
 #define FLAG_PADDLE_A 0
 #define FLAG_PADDLE_B 1
 #define FLAG_BALL_X   2
@@ -11,14 +25,16 @@ static int SCLK = 11; // serial clock
 static int OE = 9; // output enable
 
 static int BUZZER = 8; // piezo
-static int CONTROLLER_ONE = A0;
+static int CONTROLLER_ONE = A0; // player input
 static int CONTROLLER_TWO = A1;
 
 // ------- Reference numbers for game function --------
-static int frameRate = 60;
-static int frameTime = 1000/frameRate; // time inbetween frames.
+static int FRAME_RATE = 60;
+static int FRAME_TIME = 1000/FRAME_RATE; // time inbetween frames/refreshes.
 static int resolution[2] = {32, 16};
 static int PADDLE_WIDTH = 4;
+static float DEFAULT_SPEED[2] = {0.25, 0.35};
+
 
 // ------- Music tracks and sound effects --------
 struct MusicTrack {
@@ -28,14 +44,16 @@ struct MusicTrack {
 
 static struct MusicTrack STARTUP_JINGLE = {
     {
-        {987, 20},
-        {3951, 60}
+        {987, 100},
+        {3951, 300}
     },
     2
 };
 
 static struct MusicTrack MISS = {
     {
+        {600, 10},
+        {850, 10},
         {400, 10},
         {250, 10},
         {400, 10},
@@ -44,7 +62,7 @@ static struct MusicTrack MISS = {
         {250, 10},
         {100, 250}
     },
-    9
+    11
 };
 
 static struct MusicTrack HIT = {
@@ -54,49 +72,9 @@ static struct MusicTrack HIT = {
         {600, 10},
         {850, 10},
         {600, 10},
-        {850, 10},
+        {950, 10},
     },
     8
-};
-
-static struct MusicTrack A1SCALE = {
-    {
-        {55, 500},
-        {62, 500},
-        {65, 500},
-        {73, 500},
-        {82, 500},
-        {87, 500},
-        {98, 500},
-        {110, 500},
-        {123, 500},
-        {131, 500},
-        {146, 500},
-        {165, 500},
-        {175, 500},
-        {196, 500}
-    },
-    14
-};
-
-static struct MusicTrack A4SCALE = {
-    {
-        {440, 500},
-        {493, 500},
-        {523, 500},
-        {587, 500},
-        {659, 500},
-        {698, 500},
-        {784, 500},
-        {880, 500},
-        {988, 500},
-        {1047, 500},
-        {1174, 500},
-        {1318, 500},
-        {1396, 500},
-        {1567, 500}
-    },
-    14
 };
 
 // Each bit in these bytes represents one segment of a 7-segment display. 
@@ -124,12 +102,13 @@ unsigned int playerTwoScore = 0;
 unsigned long toneEndTime = 0; // records the time when a started tone should stop.
 unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
 
+bool gameActive = false; // determines whether the ball is moving, game needs to pause inbetween turns
+
 // Entities
 unsigned int paddleOnePos = resolution[1] / 2;
 unsigned int paddleTwoPos = resolution[1] / 2;
-float ballPos[2] = {0.0, resolution[1] / 2.0};
-float ballVelocity[2] = {0.15, 0.2}; // amount to move in X,Y each refresh
-
+float ballPos[2] = {2.0, resolution[1] / 2.0};
+float ballVelocity[2] = {DEFAULT_SPEED[0], DEFAULT_SPEED[1]}; // amount to move in X,Y each refresh
 
 // Pin Readings
 int controllerOneSignal = 0;
@@ -139,6 +118,74 @@ int controllerTwoSignal = 0;
 bool musicActive = false;
 struct MusicTrack* p_activeTrack;
 int trackIndex = 0;
+
+// -------- Function Prototypes -------
+void clearCounters();
+void setCounters(unsigned int playerOne, unsigned int playerTwo);
+void startTone(unsigned int frequency, unsigned int duration);
+void startMusicTrack(struct MusicTrack* p_newTrack);
+void sendWithID(int value5, int id3);
+void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
+
+
+void setup() {
+    pinMode(BUZZER, OUTPUT);
+    pinMode(SER, OUTPUT);
+    pinMode(RCLK, OUTPUT);
+    pinMode(SCLK, OUTPUT);
+    pinMode(OE, OUTPUT);
+    pinMode(CONTROLLER_ONE, INPUT);
+    pinMode(CONTROLLER_TWO, INPUT);
+
+    // Clear any floating rubbish on the registers
+    clearCounters();
+
+    startMusicTrack(&STARTUP_JINGLE);
+    //startMusicTrack(&A4SCALE);
+
+    Serial.begin(115200);
+}
+
+void loop() {
+    controllerOneSignal = analogRead(CONTROLLER_ONE);
+    controllerTwoSignal = analogRead(CONTROLLER_TWO);
+    paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
+    paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
+  
+    // is it time to update displays?
+    if (millis() > lastRefreshTime + FRAME_TIME) {
+        
+        updateBall(ballVelocity, ballPos, paddleOnePos);
+        
+        // send entity positions to graphics controller
+        sendWithID(paddleOnePos, FLAG_PADDLE_A);
+        sendWithID(paddleTwoPos, FLAG_PADDLE_B);
+        sendWithID((int)ballPos[0], FLAG_BALL_X);
+        sendWithID((int)ballPos[1], FLAG_BALL_Y);
+
+        // update 7-segment displays
+        setCounters(playerOneScore, playerTwoScore);
+        
+        lastRefreshTime = millis();
+    }
+
+    // Do we need to play music?
+    if (musicActive) {
+        // check if a note should have stopped by now
+        if (millis() > toneEndTime) {
+            noTone(BUZZER); 
+            trackIndex++;// move to the next note
+            // are we at the end of the track
+            if (trackIndex == p_activeTrack->length) {
+                musicActive = false;
+            }
+            else {
+                startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
+            }
+        }
+    }
+}
+
 
 // -------- Helper Functions --------
 // Sets all shift register pins to off.
@@ -154,14 +201,19 @@ void clearCounters() {
     digitalWrite(OE, HIGH); // Show output again
 }
 
-// Changed shift register outputs to match new values.
+/* 
+    Changed shift register outputs to match new values.
+    Maximum value of nine.
+*/
 void setCounters(unsigned int playerOne, unsigned int playerTwo) {
-    digitalWrite(OE, HIGH); // hide output while we are messing with it
-    shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerTwo]); // shift the second players score onto the first register
-    shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerOne]); // shift the first player's score onto first register, moving second player score to second register.
-    digitalWrite(RCLK, HIGH);
-    digitalWrite(RCLK, LOW);
-    digitalWrite(OE, LOW); // show new values
+    if (playerOne <= 9 && playerTwo <= 9) {
+        digitalWrite(OE, HIGH); // hide output while we are messing with it
+        shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerTwo]); // shift the second players score onto the first register
+        shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerOne]); // shift the first player's score onto first register, moving second player score to second register.
+        digitalWrite(RCLK, HIGH);
+        digitalWrite(RCLK, LOW);
+        digitalWrite(OE, LOW); // show new values
+    }
 }
 
 // starts a tone and sets the end time with duration added in milliseconds
@@ -202,75 +254,28 @@ void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
             startMusicTrack(&MISS);
             ballPos[0] = 30;
             ballPos[1] = resolution[1]/2;
-            ballVelocity[0] = -0.15;
-            ballVelocity[1] = +0.25;
+            ballVelocity[0] = DEFAULT_SPEED[0] * -1;
+            ballVelocity[1] = DEFAULT_SPEED[1];
         }
         
     }
     else if (ballPos[0] > 31) {
-        ballVelocity[0] *= -1;
+        if ((int)ballPos[1] >= paddleTwoPos && paddleTwoPos+PADDLE_WIDTH >= (int)ballPos[1]) {
+            ballVelocity[0] *= -1;
+            startMusicTrack(&HIT);
+        }
+        else {
+            playerOneScore++;
+            startMusicTrack(&MISS);
+            ballPos[0] = 1;
+            ballPos[1] = resolution[1]/2;
+            ballVelocity[0] = DEFAULT_SPEED[0];
+            ballVelocity[1] = DEFAULT_SPEED[1] * -1;
+        }
+        
     }
 
     if (ballPos[1] < 0 || ballPos[1] > 15) {
         ballVelocity[1] *= -1;
     }
-}
-
-void setup() {
-    pinMode(BUZZER, OUTPUT);
-    pinMode(SER, OUTPUT);
-    pinMode(RCLK, OUTPUT);
-    pinMode(SCLK, OUTPUT);
-    pinMode(OE, OUTPUT);
-    pinMode(CONTROLLER_ONE, INPUT);
-    pinMode(CONTROLLER_TWO, INPUT);
-
-    // Clear any floating rubbish on the registers
-    clearCounters();
-
-    startMusicTrack(&STARTUP_JINGLE);
-    //startMusicTrack(&A4SCALE);
-
-    Serial.begin(115200);
-}
-
-void loop() {
-    controllerOneSignal = analogRead(CONTROLLER_ONE);
-    controllerTwoSignal = analogRead(CONTROLLER_TWO);
-    paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
-    paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
-  
-    // is it time to update displays?
-    if (millis() > lastRefreshTime + frameTime) {
-        // update 7-segment displays
-        setCounters(playerOneScore, playerTwoScore);
-
-        updateBall(ballVelocity, ballPos, paddleOnePos);
-        
-        // send entity positions to graphics controller
-        sendWithID(paddleOnePos, FLAG_PADDLE_A);
-        sendWithID(paddleTwoPos, FLAG_PADDLE_B);
-        sendWithID((int)ballPos[0], FLAG_BALL_X);
-        sendWithID((int)ballPos[1], FLAG_BALL_Y);
-        
-        lastRefreshTime = millis();
-    }
-
-    // Do we need to play music?
-    if (musicActive) {
-        // check if a note should have stopped by now
-        if (millis() > toneEndTime) {
-            noTone(BUZZER); 
-            trackIndex++;// move to the next note
-            // are we at the end of the track
-            if (trackIndex == p_activeTrack->length) {
-                musicActive = false;
-            }
-            else {
-                startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
-            }
-        }
-    }
-    
-    
 }
