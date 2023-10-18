@@ -1,6 +1,7 @@
 /*
     ENEL599 Final Project Game Controller code
     October 2023 - Skye Pooley - 22179237
+    Plays PONG!
     This code works in tandem with the "Graphics controller code" on the other arduino.
     Both controllers are needed for the game to work.
     This controller handles:
@@ -34,6 +35,10 @@ static int FRAME_TIME = 1000/FRAME_RATE; // time inbetween frames/refreshes.
 static int resolution[2] = {32, 16};
 static int PADDLE_WIDTH = 4;
 static float DEFAULT_SPEED[2] = {0.25, 0.35};
+// the game input controller pins function both as button inputs and potentiometer inputs.
+// When the input value is below this cutoff it should be treated as a button instead of a dial.
+static int CONTROLLER_BUTTON_CUTOFF = 70;
+static int WIN_SCORE = 3; // number of rounds that a player has to win in order to win the game.
 
 
 // ------- Music tracks and sound effects --------
@@ -123,9 +128,9 @@ int playerToServe = 1;
 bool gameWon = false;
 
 // Entities
-unsigned int paddleOnePos = resolution[1] / 2;
-unsigned int paddleTwoPos = resolution[1] / 2;
-float ballPos[2] = {1.0, resolution[1] / 2.0};
+unsigned int paddleOnePos = 0;
+unsigned int paddleTwoPos = 0;
+float ballPos[2] = {1.0, 0.0};
 float ballVelocity[2] = {DEFAULT_SPEED[0], DEFAULT_SPEED[1]}; // amount to move in X,Y each refresh
 
 // Pin Readings
@@ -134,8 +139,8 @@ int controllerTwoSignal = 0;
 
 // Music tracking
 bool musicActive = false;
-struct MusicTrack* p_activeTrack;
-int trackIndex = 0;
+struct MusicTrack* p_activeTrack; // currently playing music track
+int trackIndex = 0; // what note in the track are we up to
 
 // -------- Function Prototypes -------
 void clearCounters();
@@ -157,24 +162,23 @@ void setup() {
 
     // Clear any floating rubbish on the registers
     clearCounters();
-
     startMusicTrack(&STARTUP_JINGLE);
-    //startMusicTrack(&A4SCALE);
-
     Serial.begin(115200);
 }
 
 void loop() {
+    // ----- Handle Inputs ----- //
     controllerOneSignal = analogRead(CONTROLLER_ONE);
     controllerTwoSignal = analogRead(CONTROLLER_TWO);
     // if the controller signal is being used for the dial and not the button
-    if (controllerOneSignal > 40)
-        paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
-    if (controllerTwoSignal > 40)
-        paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
+    if (controllerOneSignal > CONTROLLER_BUTTON_CUTOFF)
+        paddleOnePos = map(controllerOneSignal, CONTROLLER_BUTTON_CUTOFF,1023, 0,13); // map to screen space
+    if (controllerTwoSignal > CONTROLLER_BUTTON_CUTOFF)
+        paddleTwoPos = map(controllerTwoSignal, CONTROLLER_BUTTON_CUTOFF,1023, 0,13);
   
-    // is it time to update displays?
+    // ----- Update Game on time ----- //
     if (millis() > lastRefreshTime + FRAME_TIME) {
+        // If there is a current round happening
         if (gameActive) {
             // Update the ball position and handle point conditions.
             switch (updateBall(ballVelocity, ballPos, paddleOnePos)) {
@@ -192,17 +196,25 @@ void loop() {
                     break;
             }
         }
+        // Game is between rounds but the game is not yet won
         else if (!gameWon) {
-            if (playerToServe == 1) {
-                ballPos[1] = paddleOnePos + 1;
-                if (controllerOneSignal < 10) { gameActive = true; }
-            }
-            else if (playerToServe == 2) {
-                ballPos[1] = paddleTwoPos + 1;
-                if (controllerTwoSignal < 10) { gameActive = true; }
+            switch (playerToServe) {
+                case 1:
+                    ballPos[1] = paddleOnePos + 1;
+                    if (controllerOneSignal < 10) { gameActive = true; }
+                    break;
+                case 2:
+                    ballPos[1] = paddleTwoPos + 1;
+                    if (controllerTwoSignal < 10) { gameActive = true; }
+                    break;
             }
         }
-        
+
+        if ((playerOneScore > 3 || playerTwoScore > 3) && !gameWon) {
+            gameWon = true;
+            startMusicTrack(&WIN);
+        }
+
         // send entity positions to graphics controller
         sendWithID(paddleOnePos, FLAG_PADDLE_A);
         sendWithID(paddleTwoPos, FLAG_PADDLE_B);
@@ -212,11 +224,6 @@ void loop() {
         // update 7-segment displays
         setCounters(playerOneScore, playerTwoScore);
 
-        if ((playerOneScore > 3 || playerTwoScore > 3) && !gameWon) {
-            gameWon = true;
-            startMusicTrack(&WIN);
-        }
-        
         lastRefreshTime = millis();
     }
 
@@ -312,7 +319,6 @@ int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
         }
         else {
             ballPos[0] = 30;
-            ballPos[1] = resolution[1]/2;
             ballVelocity[0] = DEFAULT_SPEED[0] * -1;
             ballVelocity[1] = DEFAULT_SPEED[1];
             return 2;
@@ -325,12 +331,10 @@ int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
         }
         else {
             ballPos[0] = 1;
-            ballPos[1] = resolution[1]/2;
             ballVelocity[0] = DEFAULT_SPEED[0];
             ballVelocity[1] = DEFAULT_SPEED[1] * -1;
             return 1;
         }
     }
     return 0;
-
 }

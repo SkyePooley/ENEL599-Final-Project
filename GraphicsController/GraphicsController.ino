@@ -1,13 +1,26 @@
+/*
+    ENEL599 Final Project Graphics Controller
+    October 2023 - Skye Pooley - 22179237
+    Companion to the "Game Controller" code on the other arduino.
+    This code controls the RGB LED Matrix panel for the PONG project.
+    The Adafruit RGBmatrixPanel library is used for shifting out data to the panel registers
+    and selecting lines.
+    https://github.com/adafruit/RGB-matrix-Panel
+    Receives the position of entities to draw over serial.
+*/
+
 #include <RGBmatrixPanel.h>
 #include <math.h>
 
-#define CLK  8   // USE THIS ON ARDUINO UNO, ADAFRUIT METRO M0, etc.
-#define OE   9
-#define LAT 10
-#define A   A0
-#define B   A1
-#define C   A2
+// Control pins for the RGB panel
+static int CLK = 8;
+static int OE  = 9;
+static int LAT = 10;
+static int A   = A0;
+static int B   = A1;
+static int C   = A2;
 
+// Flags for identifying incoming serial transmissions.
 #define FLAG_PADDLE_A 0
 #define FLAG_PADDLE_B 1
 #define FLAG_BALL_X   2
@@ -30,10 +43,9 @@ int ballPosition[2] = {0, 7};
 
 
 void drawFrame(){
-    matrix.fillScreen(matrix.Color333(0, 0, 0));
+    matrix.fillScreen(matrix.Color333(0, 0, 0));// clear display
     matrix.fillRect(0, paddleOnePos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(7, 0, 0));
     matrix.fillRect(31, paddleTwoPos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(0, 0, 7));
-    //matrix.fillRect(31, 0, 1, 16, matrix.Color333(0, 0, 7));
     matrix.drawPixel(ballPosition[0], ballPosition[1], matrix.Color333(0, 7, 0)); // Ball
 }
 
