@@ -77,6 +77,22 @@ static struct MusicTrack HIT = {
     8
 };
 
+static struct MusicTrack WIN = {
+    {
+        {600, 10},
+        {850, 10},
+        {600, 10},
+        {850, 10},
+        {850, 10},
+        {1050, 10},
+        {850, 10},
+        {1050, 500},
+        {600, 400},
+        {1050, 800}
+    },
+    10
+};
+
 // Each bit in these bytes represents one segment of a 7-segment display. 
 // The final bit is the decimal point which is not used.
 // When referencing this array, the index number corresponds to the number displayed using that byte.
@@ -103,11 +119,13 @@ unsigned long toneEndTime = 0; // records the time when a started tone should st
 unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
 
 bool gameActive = false; // determines whether the ball is moving, game needs to pause inbetween turns
+int playerToServe = 1;
+bool gameWon = false;
 
 // Entities
 unsigned int paddleOnePos = resolution[1] / 2;
 unsigned int paddleTwoPos = resolution[1] / 2;
-float ballPos[2] = {2.0, resolution[1] / 2.0};
+float ballPos[2] = {1.0, resolution[1] / 2.0};
 float ballVelocity[2] = {DEFAULT_SPEED[0], DEFAULT_SPEED[1]}; // amount to move in X,Y each refresh
 
 // Pin Readings
@@ -125,7 +143,7 @@ void setCounters(unsigned int playerOne, unsigned int playerTwo);
 void startTone(unsigned int frequency, unsigned int duration);
 void startMusicTrack(struct MusicTrack* p_newTrack);
 void sendWithID(int value5, int id3);
-void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
+int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
 
 
 void setup() {
@@ -149,13 +167,41 @@ void setup() {
 void loop() {
     controllerOneSignal = analogRead(CONTROLLER_ONE);
     controllerTwoSignal = analogRead(CONTROLLER_TWO);
-    paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
-    paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
+    // if the controller signal is being used for the dial and not the button
+    if (controllerOneSignal > 40)
+        paddleOnePos = map(controllerOneSignal, 20,1023, 0,12);
+    if (controllerTwoSignal > 40)
+        paddleTwoPos = map(controllerTwoSignal, 20,1023, 0,12);
   
     // is it time to update displays?
     if (millis() > lastRefreshTime + FRAME_TIME) {
-        
-        updateBall(ballVelocity, ballPos, paddleOnePos);
+        if (gameActive) {
+            // Update the ball position and handle point conditions.
+            switch (updateBall(ballVelocity, ballPos, paddleOnePos)) {
+                case 1:
+                    startMusicTrack(&MISS);
+                    playerOneScore++;
+                    gameActive = false;
+                    playerToServe = 1;
+                    break;
+                case 2:
+                    startMusicTrack(&MISS);
+                    playerTwoScore++;
+                    gameActive = false;
+                    playerToServe = 2;
+                    break;
+            }
+        }
+        else if (!gameWon) {
+            if (playerToServe == 1) {
+                ballPos[1] = paddleOnePos + 1;
+                if (controllerOneSignal < 10) { gameActive = true; }
+            }
+            else if (playerToServe == 2) {
+                ballPos[1] = paddleTwoPos + 1;
+                if (controllerTwoSignal < 10) { gameActive = true; }
+            }
+        }
         
         // send entity positions to graphics controller
         sendWithID(paddleOnePos, FLAG_PADDLE_A);
@@ -165,6 +211,11 @@ void loop() {
 
         // update 7-segment displays
         setCounters(playerOneScore, playerTwoScore);
+
+        if ((playerOneScore > 3 || playerTwoScore > 3) && !gameWon) {
+            gameWon = true;
+            startMusicTrack(&WIN);
+        }
         
         lastRefreshTime = millis();
     }
@@ -216,6 +267,16 @@ void setCounters(unsigned int playerOne, unsigned int playerTwo) {
     }
 }
 
+/* 
+Sends a value over serial with an identifying flag.
+value5: value of the transmitted number, max 5 bit precision.
+id3:    id flag of the number being send, max 3 bit precision.
+*/
+void sendWithID(int value5, int id3) {
+    // shift the id flag to the three most significant bits, then join with the value.
+    Serial.write((id3 << 5) ^ value5);
+}
+
 // starts a tone and sets the end time with duration added in milliseconds
 void startTone(unsigned int frequency, unsigned int duration) {
     tone(BUZZER, frequency);
@@ -230,19 +291,19 @@ void startMusicTrack(struct MusicTrack* p_newTrack) {
     startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
 }
 
-/* 
-Sends a value over serial with an identifying flag.
-value5: value of the transmitted number, max 5 bit precision.
-id3:    id flag of the number being send, max 3 bit precision.
+/*
+    Calculates the new position of the ball and checks for collisions with screen edges and paddles.
+    returns 0 if the game continues,
+    returns 1 if player one got a point and the game needs to pause,
+    returns 2 if player two got a point and the game needs to pause.
 */
-void sendWithID(int value5, int id3) {
-    // shift the id flag to the three most significant bits, then join with the value.
-    Serial.write((id3 << 5) ^ value5);
-}
-
-void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
+int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
     ballPos[0] += ballVelocity[0];
     ballPos[1] += ballVelocity[1];
+
+    if (ballPos[1] < 0 || ballPos[1] > 15) {
+        ballVelocity[1] *= -1;
+    }
 
     if (ballPos[0] < 1) {
         if ((int)ballPos[1] >= paddleOnePos && paddleOnePos+PADDLE_WIDTH >= (int)ballPos[1]) {
@@ -250,14 +311,12 @@ void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
             startMusicTrack(&HIT);
         }
         else {
-            playerTwoScore++;
-            startMusicTrack(&MISS);
             ballPos[0] = 30;
             ballPos[1] = resolution[1]/2;
             ballVelocity[0] = DEFAULT_SPEED[0] * -1;
             ballVelocity[1] = DEFAULT_SPEED[1];
+            return 2;
         }
-        
     }
     else if (ballPos[0] > 31) {
         if ((int)ballPos[1] >= paddleTwoPos && paddleTwoPos+PADDLE_WIDTH >= (int)ballPos[1]) {
@@ -265,17 +324,13 @@ void updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
             startMusicTrack(&HIT);
         }
         else {
-            playerOneScore++;
-            startMusicTrack(&MISS);
             ballPos[0] = 1;
             ballPos[1] = resolution[1]/2;
             ballVelocity[0] = DEFAULT_SPEED[0];
             ballVelocity[1] = DEFAULT_SPEED[1] * -1;
+            return 1;
         }
-        
     }
+    return 0;
 
-    if (ballPos[1] < 0 || ballPos[1] > 15) {
-        ballVelocity[1] *= -1;
-    }
 }
