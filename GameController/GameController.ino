@@ -19,25 +19,24 @@
 #define FLAG_BALL_Y   3
 
 // ------  Static variables and pin assignments ------
-static int OE = 9; // output enable
-static int SER_PIN = 12;
-static int SCLK_PIN = 11;
-static int RCLK_PIN = 10;
-static int OE_PIN = 9;
-static int BUZZER = 8; // piezo
-static int CONTROLLER_ONE = A0; // player input
-static int CONTROLLER_TWO = A1;
+const int SER_PIN = 12;
+const int SCLK_PIN = 11;
+const int RCLK_PIN = 10;
+const int OE_PIN = 9;
+const int BUZZER = 8; // piezo
+const int CONTROLLER_ONE = A0; // player input
+const int CONTROLLER_TWO = A1;
 
 // ------- Reference numbers for game function --------
-static int FRAME_RATE = 60;
-static int FRAME_TIME = 1000/FRAME_RATE; // time inbetween frames/refreshes.
-static int resolution[2] = {32, 16};
-static int PADDLE_WIDTH = 4;
-static float DEFAULT_SPEED[2] = {0.25, 0.35};
+const int FRAME_RATE = 60;
+const int FRAME_TIME = 1000/FRAME_RATE; // time inbetween frames/refreshes.
+const int resolution[2] = {32, 16};
+const int PADDLE_WIDTH = 4;
+const float DEFAULT_SPEED[2] = {0.25, 0.35};
 // the game input controller pins function both as button inputs and potentiometer inputs.
 // When the input value is below this cutoff it should be treated as a button instead of a dial.
-static int CONTROLLER_BUTTON_CUTOFF = 70;
-static int WIN_SCORE = 3; // number of rounds that a player has to win in order to win the game.
+const int CONTROLLER_BUTTON_CUTOFF = 70;
+const int WIN_SCORE = 3; // number of rounds that a player has to win in order to win the game.
 
 
 // ------- Music tracks and sound effects --------
@@ -200,13 +199,60 @@ class ScoreCounter {
         }
 };
 
+/*
+    Manages the playback of sounds
+    Call update each loop to keep things on time
+*/
+class SoundManager {
+    private:
+        unsigned long toneEndTime; // records the time when a started tone should stop.
+        bool soundPlaying;
+        struct MusicTrack* p_activeTrack; // currently playing music track
+        int trackIndex; // what note in the track are we up to
+        int BUZZER; // pin for piezo buzzer
+
+        void startTone(unsigned int frequency, unsigned int duration) {
+            tone(BUZZER, frequency);
+            toneEndTime = millis() + duration;
+        }
+    public:
+        SoundManager(int BUZZER_PIN) {
+            BUZZER = BUZZER_PIN;
+            soundPlaying = false;
+            toneEndTime = 0;
+            trackIndex = 0;
+        }
+
+        void beginSound(struct MusicTrack* p_newTrack) {
+            p_activeTrack = p_newTrack;
+            soundPlaying = true;
+            trackIndex = 0;
+            startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
+        }
+
+        void update() {
+            if (soundPlaying) {
+                // check if a note should have stopped by now
+                if (millis() > toneEndTime) {
+                    noTone(BUZZER); 
+                    trackIndex++;// move to the next note
+                    // are we at the end of the track
+                    if (trackIndex == p_activeTrack->length) {
+                        soundPlaying = false;
+                    }
+                    else {
+                        startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
+                    }
+                }
+            }
+        }        
+};
 
 // ------  Dynamic Variables  --------
-// Scores
 ScoreCounter scoreCounters(SER_PIN, SCLK_PIN, RCLK_PIN, OE_PIN);
+SoundManager soundManager(BUZZER);
 
 // Timers
-unsigned long toneEndTime = 0; // records the time when a started tone should stop.
 unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
 
 bool gameActive = false; // determines whether the ball is moving, game needs to pause inbetween turns
@@ -223,14 +269,7 @@ float ballVelocity[2] = {DEFAULT_SPEED[0], DEFAULT_SPEED[1]}; // amount to move 
 int controllerOneSignal = 0;
 int controllerTwoSignal = 0;
 
-// Music tracking
-bool musicActive = false;
-struct MusicTrack* p_activeTrack; // currently playing music track
-int trackIndex = 0; // what note in the track are we up to
-
 // -------- Function Prototypes -------
-void startTone(unsigned int frequency, unsigned int duration);
-void startMusicTrack(struct MusicTrack* p_newTrack);
 void sendWithID(int value5, int id3);
 int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
 
@@ -245,7 +284,7 @@ void setup() {
     pinMode(OE_PIN, OUTPUT);
 
     scoreCounters.refresh();
-    startMusicTrack(&STARTUP_JINGLE);
+    soundManager.beginSound(&STARTUP_JINGLE);
     Serial.begin(115200);
 }
 
@@ -266,13 +305,13 @@ void loop() {
             // Update the ball position and handle point conditions.
             switch (updateBall(ballVelocity, ballPos, paddleOnePos)) {
                 case 1:
-                    startMusicTrack(&MISS);
+                    soundManager.beginSound(&MISS);
                     scoreCounters.incrementPlayerOneScore();
                     gameActive = false;
                     playerToServe = 1;
                     break;
                 case 2:
-                    startMusicTrack(&MISS);
+                    soundManager.beginSound(&MISS);
                     scoreCounters.incrementPlayerTwoScore();
                     gameActive = false;
                     playerToServe = 2;
@@ -295,7 +334,7 @@ void loop() {
 
         if ((scoreCounters.getPlayerOneScore() > 3 || scoreCounters.getPlayerTwoScore() > 3) && !gameWon) {
             gameWon = true;
-            startMusicTrack(&WIN);
+            soundManager.beginSound(&WIN);
         }
 
         // send entity positions to graphics controller
@@ -304,27 +343,12 @@ void loop() {
         sendWithID((int)ballPos[0], FLAG_BALL_X);
         sendWithID((int)ballPos[1], FLAG_BALL_Y);
 
-        // update 7-segment displays
-        //setCounters(playerOneScore, playerTwoScore);
+        soundManager.update();
 
         lastRefreshTime = millis();
     }
 
-    // Do we need to play music?
-    if (musicActive) {
-        // check if a note should have stopped by now
-        if (millis() > toneEndTime) {
-            noTone(BUZZER); 
-            trackIndex++;// move to the next note
-            // are we at the end of the track
-            if (trackIndex == p_activeTrack->length) {
-                musicActive = false;
-            }
-            else {
-                startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
-            }
-        }
-    }
+    
 }
 
 
@@ -339,21 +363,6 @@ void sendWithID(int value5, int id3) {
     // shift the id flag to the three most significant bits, then join with the value.
     Serial.write((id3 << 5) ^ value5);
 }
-
-// starts a tone and sets the end time with duration added in milliseconds
-void startTone(unsigned int frequency, unsigned int duration) {
-    tone(BUZZER, frequency);
-    toneEndTime = millis() + duration;
-}
-
-// Sets up the required variables to play a music track and starts the first note.
-void startMusicTrack(struct MusicTrack* p_newTrack) {
-    p_activeTrack = p_newTrack;
-    musicActive = true;
-    trackIndex = 0;
-    startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
-}
-
 /*
     Calculates the new position of the ball and checks for collisions with screen edges and paddles.
     returns 0 if the game continues,
@@ -371,7 +380,7 @@ int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
     if (ballPos[0] < 1) {
         if ((int)ballPos[1] >= paddleOnePos && paddleOnePos+PADDLE_WIDTH >= (int)ballPos[1]) {
             ballVelocity[0] *= -1;
-            startMusicTrack(&HIT);
+            soundManager.beginSound(&HIT);
         }
         else {
             ballPos[0] = 30;
@@ -383,7 +392,7 @@ int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
     else if (ballPos[0] > 31) {
         if ((int)ballPos[1] >= paddleTwoPos && paddleTwoPos+PADDLE_WIDTH >= (int)ballPos[1]) {
             ballVelocity[0] *= -1;
-            startMusicTrack(&HIT);
+            soundManager.beginSound(&HIT);
         }
         else {
             ballPos[0] = 1;
