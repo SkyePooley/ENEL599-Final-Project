@@ -19,12 +19,11 @@
 #define FLAG_BALL_Y   3
 
 // ------  Static variables and pin assignments ------
-// Shift register control pins
-static int SER = 12; // data pin 
-static int RCLK = 10; // register clock
-static int SCLK = 11; // serial clock
 static int OE = 9; // output enable
-
+static int SER_PIN = 12;
+static int SCLK_PIN = 11;
+static int RCLK_PIN = 10;
+static int OE_PIN = 9;
 static int BUZZER = 8; // piezo
 static int CONTROLLER_ONE = A0; // player input
 static int CONTROLLER_TWO = A1;
@@ -98,26 +97,113 @@ static struct MusicTrack WIN = {
     10
 };
 
-// Each bit in these bytes represents one segment of a 7-segment display. 
-// The final bit is the decimal point which is not used.
-// When referencing this array, the index number corresponds to the number displayed using that byte.
-char digitMappings[10] = {
-    0b11111100, //0
-    0b01100000, //1
-    0b11011010, //2
-    0b11110010, //3
-    0b01100110, //4
-    0b10110110, //5
-    0b10111110, //6
-    0b11100000, //7
-    0b11111110, //8
-    0b11100110, //9
+/*
+    Keeps track of the player scores and manages the 7-segment displays.
+    SER_PIN:    pin which carries the serial data to the shift registers
+    SCLK_PIN:   pin which carries the serial clock 
+    RCLK_PIN:   pin chich carries the register clock to move data to the output registers
+    OE_PIN:     pin which enables and disables the register outputs, active low.
+*/
+class ScoreCounter {
+    private:
+        // Each bit in these bytes represents one segment of a 7-segment display. 
+        // The final bit is the decimal point which is not used.
+        // When referencing this array, the index number corresponds to the number displayed using that byte.
+        const unsigned char digitMappings[10] = {
+            0b11111100, //0
+            0b01100000, //1
+            0b11011010, //2
+            0b11110010, //3
+            0b01100110, //4
+            0b10110110, //5
+            0b10111110, //6
+            0b11100000, //7
+            0b11111110, //8
+            0b11100110, //9
+        };
+        int SER;
+        int SCLK;
+        int RCLK;
+        int OE;
+        int scores[2];
+    public:
+        ScoreCounter(int SER_PIN, int SCLK_PIN, int RCLK_PIN, int OE_PIN) {
+            SER = SER_PIN;
+            SCLK = SCLK_PIN;
+            RCLK = RCLK_PIN;
+            OE = OE_PIN;
+            scores[0] = 0;
+            scores[1] = 0;
+        }
+
+        /* Increase the first player's score unless they have already reached the winning score.
+           Updates the 7-segment displays with the new value. */
+        void incrementPlayerOneScore() {
+            if (scores[0] < WIN_SCORE) {
+                scores[0]++;
+            }
+            refresh();
+        }
+
+        // Increase the second player's score unless they have already reached the winning score.
+        void incrementPlayerTwoScore() {
+            if (scores[1] < WIN_SCORE) {
+                scores[1]++;
+            }
+            refresh();
+        }
+
+        int getPlayerOneScore() {
+            return scores[0];
+        }
+
+        int getPlayerTwoScore() {
+            return scores[1];
+        }
+
+        // Clears all data in the shift registers setting all segments to off.
+        void clearRegisters() {
+            // clear shift registers
+            digitalWrite(OE, HIGH); // Disable output
+            digitalWrite(RCLK, LOW);
+            shiftOut(SER, SCLK, MSBFIRST, 0b00000000); 
+            shiftOut(SER, SCLK, MSBFIRST, 0b00000000);
+            digitalWrite(RCLK, HIGH); // shift new data to output register.
+            delay(1);
+            digitalWrite(RCLK, LOW);
+            digitalWrite(OE, LOW); // Show output again
+        }
+        /* 
+            Chang shift register outputs to match new values.
+            Maximum value of nine.
+        */
+        void refresh() {
+            if (scores[0] <= 9 && scores[1] <= 9) {
+                digitalWrite(OE, HIGH); // hide output while we are messing with it
+                // shift the second players score onto the first register
+                shiftOut(SER, SCLK, LSBFIRST, digitMappings[scores[0]]); 
+                // shift the first player's score onto first register, moving second player score to second register.
+                shiftOut(SER, SCLK, LSBFIRST, digitMappings[scores[1]]); 
+                digitalWrite(RCLK, HIGH);
+                digitalWrite(RCLK, LOW);
+                digitalWrite(OE, LOW); // show new values
+            }
+        }
+        /*
+            Set the counters back to zero.
+        */
+        void reset() {
+            clearRegisters();
+            scores[0] = 0;
+            scores[1] = 0;
+            refresh();
+        }
 };
+
 
 // ------  Dynamic Variables  --------
 // Scores
-unsigned int playerOneScore = 0;
-unsigned int playerTwoScore = 0;
+ScoreCounter scoreCounters(SER_PIN, SCLK_PIN, RCLK_PIN, OE_PIN);
 
 // Timers
 unsigned long toneEndTime = 0; // records the time when a started tone should stop.
@@ -143,8 +229,6 @@ struct MusicTrack* p_activeTrack; // currently playing music track
 int trackIndex = 0; // what note in the track are we up to
 
 // -------- Function Prototypes -------
-void clearCounters();
-void setCounters(unsigned int playerOne, unsigned int playerTwo);
 void startTone(unsigned int frequency, unsigned int duration);
 void startMusicTrack(struct MusicTrack* p_newTrack);
 void sendWithID(int value5, int id3);
@@ -152,16 +236,15 @@ int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
 
 
 void setup() {
-    pinMode(BUZZER, OUTPUT);
-    pinMode(SER, OUTPUT);
-    pinMode(RCLK, OUTPUT);
-    pinMode(SCLK, OUTPUT);
-    pinMode(OE, OUTPUT);
     pinMode(CONTROLLER_ONE, INPUT);
     pinMode(CONTROLLER_TWO, INPUT);
+    pinMode(BUZZER, OUTPUT);
+    pinMode(SER_PIN, OUTPUT);
+    pinMode(RCLK_PIN, OUTPUT);
+    pinMode(SCLK_PIN, OUTPUT);
+    pinMode(OE_PIN, OUTPUT);
 
-    // Clear any floating rubbish on the registers
-    clearCounters();
+    scoreCounters.refresh();
     startMusicTrack(&STARTUP_JINGLE);
     Serial.begin(115200);
 }
@@ -184,13 +267,13 @@ void loop() {
             switch (updateBall(ballVelocity, ballPos, paddleOnePos)) {
                 case 1:
                     startMusicTrack(&MISS);
-                    playerOneScore++;
+                    scoreCounters.incrementPlayerOneScore();
                     gameActive = false;
                     playerToServe = 1;
                     break;
                 case 2:
                     startMusicTrack(&MISS);
-                    playerTwoScore++;
+                    scoreCounters.incrementPlayerTwoScore();
                     gameActive = false;
                     playerToServe = 2;
                     break;
@@ -210,7 +293,7 @@ void loop() {
             }
         }
 
-        if ((playerOneScore > 3 || playerTwoScore > 3) && !gameWon) {
+        if ((scoreCounters.getPlayerOneScore() > 3 || scoreCounters.getPlayerTwoScore() > 3) && !gameWon) {
             gameWon = true;
             startMusicTrack(&WIN);
         }
@@ -222,7 +305,7 @@ void loop() {
         sendWithID((int)ballPos[1], FLAG_BALL_Y);
 
         // update 7-segment displays
-        setCounters(playerOneScore, playerTwoScore);
+        //setCounters(playerOneScore, playerTwoScore);
 
         lastRefreshTime = millis();
     }
@@ -246,33 +329,6 @@ void loop() {
 
 
 // -------- Helper Functions --------
-// Sets all shift register pins to off.
-void clearCounters() {
-    // clear shift registers
-    digitalWrite(OE, HIGH); // Disable output
-    digitalWrite(RCLK, LOW);
-    shiftOut(SER, SCLK, MSBFIRST, 0b00000000); 
-    shiftOut(SER, SCLK, MSBFIRST, 0b00000000);
-    digitalWrite(RCLK, HIGH); // shift new data to output register.
-    delay(1);
-    digitalWrite(RCLK, LOW);
-    digitalWrite(OE, HIGH); // Show output again
-}
-
-/* 
-    Changed shift register outputs to match new values.
-    Maximum value of nine.
-*/
-void setCounters(unsigned int playerOne, unsigned int playerTwo) {
-    if (playerOne <= 9 && playerTwo <= 9) {
-        digitalWrite(OE, HIGH); // hide output while we are messing with it
-        shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerTwo]); // shift the second players score onto the first register
-        shiftOut(SER, SCLK, LSBFIRST, digitMappings[playerOne]); // shift the first player's score onto first register, moving second player score to second register.
-        digitalWrite(RCLK, HIGH);
-        digitalWrite(RCLK, LOW);
-        digitalWrite(OE, LOW); // show new values
-    }
-}
 
 /* 
 Sends a value over serial with an identifying flag.
