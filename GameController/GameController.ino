@@ -18,7 +18,7 @@
 #define FLAG_BALL_X   2
 #define FLAG_BALL_Y   3
 
-// ------  Static variables and pin assignments ------
+// ------  Static variables and pin assignments ------ //
 const int SER_PIN = 12;
 const int SCLK_PIN = 11;
 const int RCLK_PIN = 10;
@@ -27,12 +27,12 @@ const int BUZZER = 8; // piezo
 const int CONTROLLER_ONE = A0; // player input
 const int CONTROLLER_TWO = A1;
 
-// ------- Reference numbers for game function --------
+// ------- Reference numbers for game function -------- //
 const int FRAME_RATE = 60;
 const int FRAME_TIME = 1000/FRAME_RATE; // time inbetween frames/refreshes.
 const int resolution[2] = {32, 16};
-const int PADDLE_WIDTH = 4;
-const float DEFAULT_SPEED[2] = {0.25, 0.35};
+const int PADDLE_WIDTH = 4; // for collision detecion
+const float DEFAULT_SPEED[2] = {0.25, 0.35}; // default ball velocity
 // the game input controller pins function both as button inputs and potentiometer inputs.
 // When the input value is below this cutoff it should be treated as a button instead of a dial.
 const int CONTROLLER_BUTTON_CUTOFF = 70;
@@ -50,7 +50,7 @@ static struct MusicTrack STARTUP_JINGLE = {
         {987, 100},
         {3951, 300}
     },
-    2
+    2 // Taken from the GameBoy startup sound
 };
 
 static struct MusicTrack MISS = {
@@ -80,6 +80,7 @@ static struct MusicTrack HIT = {
     8
 };
 
+// this one sounds terrible, I need to compose something better.
 static struct MusicTrack WIN = {
     {
         {600, 10},
@@ -141,7 +142,7 @@ class ScoreCounter {
             if (scores[0] < WIN_SCORE) {
                 scores[0]++;
             }
-            refresh();
+            refresh(); // show new value on displays
         }
 
         // Increase the second player's score unless they have already reached the winning score.
@@ -162,7 +163,6 @@ class ScoreCounter {
 
         // Clears all data in the shift registers setting all segments to off.
         void clearRegisters() {
-            // clear shift registers
             digitalWrite(OE, HIGH); // Disable output
             digitalWrite(RCLK, LOW);
             shiftOut(SER, SCLK, MSBFIRST, 0b00000000); 
@@ -172,8 +172,9 @@ class ScoreCounter {
             digitalWrite(RCLK, LOW);
             digitalWrite(OE, LOW); // Show output again
         }
+
         /* 
-            Chang shift register outputs to match new values.
+            Change shift register outputs to match new values.
             Maximum value of nine.
         */
         void refresh() {
@@ -205,12 +206,13 @@ class ScoreCounter {
 */
 class SoundManager {
     private:
-        unsigned long toneEndTime; // records the time when a started tone should stop.
+        unsigned long toneEndTime; // records the time when a started tone should be stopped.
         bool soundPlaying;
         struct MusicTrack* p_activeTrack; // currently playing music track
         int trackIndex; // what note in the track are we up to
         int BUZZER; // pin for piezo buzzer
 
+        // Play a singel note on the buzzer with a set duration
         void startTone(unsigned int frequency, unsigned int duration) {
             tone(BUZZER, frequency);
             toneEndTime = millis() + duration;
@@ -223,20 +225,22 @@ class SoundManager {
             trackIndex = 0;
         }
 
+        // Begin playback of a track, updates variables and starts the first note.
         void beginSound(struct MusicTrack* p_newTrack) {
             p_activeTrack = p_newTrack;
             soundPlaying = true;
             trackIndex = 0;
-            startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]);
+            startTone(p_activeTrack->notes[trackIndex][0], p_activeTrack->notes[trackIndex][1]); // start the first note of the new track.
         }
 
+        // Call this every cycle to update which note is playing
         void update() {
             if (soundPlaying) {
                 // check if a note should have stopped by now
                 if (millis() > toneEndTime) {
                     noTone(BUZZER); 
                     trackIndex++;// move to the next note
-                    // are we at the end of the track
+                    // are we at the end of the track?
                     if (trackIndex == p_activeTrack->length) {
                         soundPlaying = false;
                     }
@@ -248,15 +252,13 @@ class SoundManager {
         }        
 };
 
-// ------  Dynamic Variables  --------
+// ------  Dynamic Variables  -------- //
 ScoreCounter scoreCounters(SER_PIN, SCLK_PIN, RCLK_PIN, OE_PIN);
 SoundManager soundManager(BUZZER);
 
-// Timers
 unsigned long lastRefreshTime = 0; // time that the frame was last refreshed.
-
 bool gameActive = false; // determines whether the ball is moving, game needs to pause inbetween turns
-int playerToServe = 1;
+int playerToServe = 1; // player to serve the ball this turn
 bool gameWon = false;
 
 // Entities
@@ -272,7 +274,6 @@ int controllerTwoSignal = 0;
 // -------- Function Prototypes -------
 void sendWithID(int value5, int id3);
 int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos);
-
 
 void setup() {
     pinMode(CONTROLLER_ONE, INPUT);
@@ -297,6 +298,8 @@ void loop() {
         paddleOnePos = map(controllerOneSignal, CONTROLLER_BUTTON_CUTOFF,1023, 0,13); // map to screen space
     if (controllerTwoSignal > CONTROLLER_BUTTON_CUTOFF)
         paddleTwoPos = map(controllerTwoSignal, CONTROLLER_BUTTON_CUTOFF,1023, 0,13);
+
+    soundManager.update(); // sounds have to be updated more frequently than the refresh timer as some notes may be very short.
   
     // ----- Update Game on time ----- //
     if (millis() > lastRefreshTime + FRAME_TIME) {
@@ -332,7 +335,9 @@ void loop() {
             }
         }
 
-        if ((scoreCounters.getPlayerOneScore() > 3 || scoreCounters.getPlayerTwoScore() > 3) && !gameWon) {
+        // Check if either player has reached the win condition and the game has not yet been won.
+        if ((scoreCounters.getPlayerOneScore() >= WIN_SCORE || scoreCounters.getPlayerTwoScore() >= WIN_SCORE) && !gameWon) {
+            // Congratulations!
             gameWon = true;
             soundManager.beginSound(&WIN);
         }
@@ -343,12 +348,8 @@ void loop() {
         sendWithID((int)ballPos[0], FLAG_BALL_X);
         sendWithID((int)ballPos[1], FLAG_BALL_Y);
 
-        soundManager.update();
-
         lastRefreshTime = millis();
     }
-
-    
 }
 
 
@@ -363,43 +364,54 @@ void sendWithID(int value5, int id3) {
     // shift the id flag to the three most significant bits, then join with the value.
     Serial.write((id3 << 5) ^ value5);
 }
+
 /*
     Calculates the new position of the ball and checks for collisions with screen edges and paddles.
     returns 0 if the game continues,
     returns 1 if player one got a point and the game needs to pause,
     returns 2 if player two got a point and the game needs to pause.
 */
-int updateBall(float* ballVelocity, float* ballPos, int paddleOnePos) {
+int updateBall(float* ballVelocity, float* ballPos) {
+    // Update the ball's position according to the velocity vector
     ballPos[0] += ballVelocity[0];
     ballPos[1] += ballVelocity[1];
 
+    // Reflect off the top and bottom of the screen
     if (ballPos[1] < 0 || ballPos[1] > 15) {
         ballVelocity[1] *= -1;
     }
 
+    // Has the ball reached the left side of the screen?
     if (ballPos[0] < 1) {
+        // Is the first player's paddle in position to hit the ball?
         if ((int)ballPos[1] >= paddleOnePos && paddleOnePos+PADDLE_WIDTH >= (int)ballPos[1]) {
+            // Yes! reflect back the other direction 
             ballVelocity[0] *= -1;
             soundManager.beginSound(&HIT);
         }
         else {
+            // No :( pass the ball to the other player
             ballPos[0] = 30;
             ballVelocity[0] = DEFAULT_SPEED[0] * -1;
             ballVelocity[1] = DEFAULT_SPEED[1];
-            return 2;
+            return 2; // tell the parent function that player 2 needs a point
         }
     }
+    // Has the ball reached the right side of the screen?
     else if (ballPos[0] > 31) {
+        // Is player two's paddle in position to hit the ball?
         if ((int)ballPos[1] >= paddleTwoPos && paddleTwoPos+PADDLE_WIDTH >= (int)ballPos[1]) {
+            // Yes! reflect
             ballVelocity[0] *= -1;
             soundManager.beginSound(&HIT);
         }
         else {
+            // No :( pass the ball to the other player
             ballPos[0] = 1;
             ballVelocity[0] = DEFAULT_SPEED[0];
             ballVelocity[1] = DEFAULT_SPEED[1] * -1;
-            return 1;
+            return 1; // tell the parent class that player one needs a point
         }
     }
-    return 0;
+    return 0; // tell the parent class that no points need to be awarded
 }

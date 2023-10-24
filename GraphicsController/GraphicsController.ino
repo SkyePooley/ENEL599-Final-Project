@@ -10,7 +10,6 @@
 */
 
 #include <RGBmatrixPanel.h>
-#include <math.h>
 
 // Control pins for the RGB panel
 static int CLK = 8;
@@ -32,20 +31,22 @@ static int paddleDimensions[2] = {1,4}; // x,y
 
 RGBmatrixPanel matrix(A, B, C, CLK, LAT, OE, false);
 
-// Timers
+// Timer to update the video output at a regular rate
 unsigned long lastDrawnTime = millis();
-unsigned long timeStamp = millis();
 
+// Vertical position of the paddles
 int paddleOnePos = 0;
 int paddleTwoPos = 0;
+
 // 0-31, 0-15 matched to matrix dimensions. Origin 0,0 is top left.
 int ballPosition[2] = {0, 7}; 
 
 
 void drawFrame(){
     matrix.fillScreen(matrix.Color333(0, 0, 0));// clear display
-    matrix.fillRect(0, paddleOnePos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(7, 0, 0));
-    matrix.fillRect(31, paddleTwoPos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(0, 0, 7));
+    // Draw paddles
+    matrix.fillRect(0, paddleOnePos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(7, 0, 0));  // Player One
+    matrix.fillRect(31, paddleTwoPos, paddleDimensions[0], paddleDimensions[1], matrix.Color333(0, 0, 7)); // Player Two
     matrix.drawPixel(ballPosition[0], ballPosition[1], matrix.Color333(0, 7, 0)); // Ball
 }
 
@@ -63,11 +64,13 @@ void setup() {
 }
 
 void loop() {
+    // Receive data from control arduino
     while(Serial.available() > 0) {
         char receivedByte = Serial.read();
         char flag = (receivedByte & 0b11100000) >> 5;
         char value = receivedByte & 0b00011111;
-      
+
+        // Match flag to variable
         switch(flag) {
           case FLAG_PADDLE_A:
             paddleOnePos = value;
@@ -84,13 +87,9 @@ void loop() {
         }
     }
   
-    // Refresh the frame on time.
+    // Refresh the video output on time.
     if (millis() - lastDrawnTime > frameTime) {
         lastDrawnTime = millis();
         drawFrame();
     }
-
-
-    
-  
 }
